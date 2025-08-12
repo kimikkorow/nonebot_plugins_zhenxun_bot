@@ -129,13 +129,12 @@ jobs:
           # 阿里云 SDK 客户端初始化函数
           def get_client() -> devops20210625Client:
             credentials = get_credentials()
-              """获取阿里云客户端"""
-              config = open_api_models.Config(
-                  credential=credentials,
-                  endpoint="devops.cn-hangzhou.aliyuncs.com",
-                  region_id="cn-hangzhou",
-              )
-              return devops20210625Client(config)
+            config = open_api_models.Config(
+                credential=credentials,
+                endpoint="devops.cn-hangzhou.aliyuncs.com",
+                region_id="cn-hangzhou",
+            )
+            return devops20210625Client(config)
 
 
           # 创建仓库函数
