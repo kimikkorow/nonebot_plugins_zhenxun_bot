@@ -1,4 +1,4 @@
-name: Sync to Aliyun on PR
+name: PR Sync to Aliyun
 
 on:
   pull_request:
@@ -13,6 +13,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write  # 添加issues:write权限以创建评论
     steps:
       - name: Checkout code with PR changes
         uses: actions/checkout@v4
@@ -27,8 +28,8 @@ jobs:
           import os
           
           # 获取当前和基础分支的plugins.json
-          current_plugins = {}
-          base_plugins = {}
+          current_plugins = []
+          base_plugins = []
           
           try:
               with open('plugins.json', 'r', encoding='utf-8') as f:
@@ -37,17 +38,17 @@ jobs:
               print("::warning::plugins.json not found")
           
           # 获取基础分支的plugins.json
-          os.system('git fetch origin ${{ github.base_ref }} --depth=1')
-          os.system('git checkout origin/${{ github.base_ref }} -- plugins.json 2>/dev/null || true')
+          base_ref = os.environ['GITHUB_BASE_REF']
+          head_ref = os.environ['GITHUB_HEAD_REF']
+          
+          os.system(f'git fetch origin {base_ref} --depth=1')
+          os.system(f'git show origin/{base_ref}:plugins.json > base_plugins.json 2>/dev/null || true')
           
           try:
-              with open('plugins.json', 'r', encoding='utf-8') as f:
+              with open('base_plugins.json', 'r', encoding='utf-8') as f:
                   base_plugins = json.load(f)
           except FileNotFoundError:
               print("::warning::Base plugins.json not found")
-          
-          # 切回PR分支的plugins.json
-          os.system('git checkout ${{ github.event.pull_request.head.ref }} -- plugins.json')
           
           # 找出新增或修改的插件
           changed = []
@@ -60,8 +61,8 @@ jobs:
                   
               base_plugin = base_map.get(github_url)
               
-              # 新增插件或github_url有变更
-              if not base_plugin or base_plugin.get('github_url') != github_url:
+              # 新增插件或插件数据有变更
+              if not base_plugin or json.dumps(plugin, sort_keys=True) != json.dumps(base_plugin, sort_keys=True):
                   # 提取仓库名称
                   repo_name = github_url.split('/')[-1]
                   if repo_name.endswith('.git'):
@@ -74,20 +75,27 @@ jobs:
                       'current_data': plugin
                   })
           
-          # 输出结果
-          print(f"Changed plugins: {json.dumps(changed, ensure_ascii=False)}")
-          print(f"::set-output name=changed_plugins::{json.dumps(changed)}")
+          # 使用新方法输出结果
+          if changed:
+              print(f"Changed plugins: {json.dumps(changed, ensure_ascii=False)}")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write(f'changed_plugins={json.dumps(changed)}\n')
+          else:
+              print("No changed plugins found")
         shell: python
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
 
       - name: Setup Git
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
-          git config --global http.postBuffer 524288000  # 增加缓冲区大小
+          git config --global http.postBuffer 524288000
 
       - name: Process each changed plugin
         id: process-plugins
-        if: ${{ fromJson(steps.changed-plugins.outputs.changed_plugins) != '[]' }}
+        if: ${{ steps.changed-plugins.outputs.changed_plugins != '' }}
         run: |
           import json
           import os
@@ -149,19 +157,21 @@ jobs:
                       'error': str(e)
                   })
           
-          # 输出结果
-          print(f"::set-output name=results::{json.dumps(results)}")
+          # 使用新方法输出结果
+          if results:
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write(f'results={json.dumps(results)}\n')
         env:
           ALIYUN_ACCOUNT: ${{ secrets.ALIYUN_ACCOUNT }}
           ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
           ALIYUN_ORG_ID: '67a361cf556e6cdab537117a'
           ALIYUN_GROUP_PATH: 'zhenxun_plugins'
-        shell: python
 
       - name: Update plugins.json with aliurl
-        if: ${{ fromJson(steps.process-plugins.outputs.results) != '[]' }}
+        if: ${{ steps.process-plugins.outputs.results != '' }}
         run: |
           import json
+          import os
           
           # 读取当前plugins.json
           with open('plugins.json', 'r', encoding='utf-8') as f:
@@ -195,11 +205,11 @@ jobs:
         shell: python
 
       - name: Commit and push changes
-        if: ${{ success() && fromJson(steps.process-plugins.outputs.results) != '[]' }}
+        if: ${{ success() && steps.process-plugins.outputs.results != '' }}
         run: |
           git add plugins.json
           
-          if git diff-index --quiet HEAD --; then
+          if git diff --staged --quiet; then
             echo "No changes to commit"
           else
             git commit -m "Add aliurl to plugins.json for Aliyun Codeup sync"
@@ -210,8 +220,10 @@ jobs:
         if: ${{ always() }}
         uses: actions/github-script@v6
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}  # 显式传递令牌
           script: |
-            const results = JSON.parse('${{ steps.process-plugins.outputs.results || '[]' }}');
+            const results = '${{ steps.process-plugins.outputs.results || '[]' }}' ? 
+                           JSON.parse('${{ steps.process-plugins.outputs.results || '[]' }}') : [];
             
             let message = "### 🔄 阿里云同步结果\n\n";
             
@@ -237,9 +249,13 @@ jobs:
               }
             }
             
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: message
-            });
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: message
+              });
+            } catch (e) {
+              console.error("Failed to create comment:", e);
+            }
