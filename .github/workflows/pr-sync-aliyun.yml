@@ -101,6 +101,8 @@ jobs:
           ALIYUN_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
           ALIYUN_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
           ALIYUN_ACCESS_TOKEN: ${{ secrets.ALIYUN_ACCESS_TOKEN }}
+          ALIYUN_ACCOUNT: ${{ secrets.ALIYUN_ACCOUNT }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
           ALIYUN_ORG_ID: '67a361cf556e6cdab537117a'
           ALIYUN_GROUP_PATH: 'zhenxun_plugins'
         run: |
