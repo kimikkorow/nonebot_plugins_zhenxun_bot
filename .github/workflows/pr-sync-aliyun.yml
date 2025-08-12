@@ -1,41 +1,39 @@
-name: PR Sync to Aliyun
+name: Sync plugins to Aliyun Codeup
 
 on:
-  pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request:
     paths:
-      - 'plugins.json'
+      - "plugins.json"
 
 jobs:
-  sync_to_aliyun:
+  detect-and-sync:
     runs-on: ubuntu-latest
-    name: Sync plugins to Aliyun Codeup
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
 
     steps:
-      - name: Checkout base repo (safe)
+      # 1. 检出 PR 分支代码（保留完整历史）
+      - name: Checkout PR branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.base_ref }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
           fetch-depth: 0
 
-      - name: Fetch PR branch from fork
+      # 2. 拉取 base 仓库对应分支
+      - name: Fetch base branch
         run: |
-          git remote add pr_repo https://github.com/${{ github.event.pull_request.head.repo.full_name }}.git
-          git fetch pr_repo ${{ github.head_ref }} --depth=1
-          git checkout FETCH_HEAD
+          git remote add upstream https://github.com/${{ github.repository }}.git
+          git fetch upstream ${{ github.base_ref }} --depth=1
 
+      # 3. 检测插件变更（用 Python 脚本）
       - name: Identify changed plugins
         id: changed-plugins
+        shell: python
         run: |
           import json
           import os
           import subprocess
 
-          # 先保存当前 plugins.json
+          # 当前（PR 分支）的 plugins.json
           try:
               with open('plugins.json', 'r', encoding='utf-8') as f:
                   current_plugins = json.load(f)
@@ -43,18 +41,19 @@ jobs:
               current_plugins = []
               print("::warning::plugins.json not found in PR branch")
 
-          # 获取 base 分支的 plugins.json
-          subprocess.run(['git', 'checkout', '${{ github.base_ref }}'], check=True)
+          # 切到 base 分支临时目录读取
+          subprocess.run(['git', 'show', f'upstream/${{ github.base_ref }}:plugins.json'],
+                         stdout=open('base_plugins.json', 'w', encoding='utf-8'),
+                         check=False)
+
           try:
-              with open('plugins.json', 'r', encoding='utf-8') as f:
+              with open('base_plugins.json', 'r', encoding='utf-8') as f:
                   base_plugins = json.load(f)
-          except FileNotFoundError:
+          except (FileNotFoundError, json.JSONDecodeError):
               base_plugins = []
-              print("::warning::Base plugins.json not found")
+              print("::warning::Base plugins.json not found or invalid")
 
-          # 再切回 PR 分支
-          subprocess.run(['git', 'checkout', '-'], check=True)
-
+          # 变更检测
           changed = []
           base_map = {p.get('github_url'): p for p in base_plugins}
           for plugin in current_plugins:
@@ -75,19 +74,14 @@ jobs:
 
           if changed:
               print(f"Changed plugins: {json.dumps(changed, ensure_ascii=False)}")
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write(f'changed_plugins={json.dumps(changed)}\n')
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+                  f.write(f'changed_plugins={json.dumps(changed, ensure_ascii=False)}\n')
           else:
               print("No changed plugins found")
-        shell: python
 
-      # 后面的步骤（推送到阿里云 / 更新 aliurl / 提交）可以保留你原来的逻辑
-
-        env:
-          GITHUB_BASE_REF: ${{ github.base_ref }}
-          GITHUB_HEAD_REF: ${{ github.head_ref }}
-
-      - name: Setup Git
+      # 4. 你原来的同步步骤（只在有变更时执行）
+      - name: Sync to Aliyun Codeup
+        if: steps.changed-plugins.outputs.changed_plugins != ''
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
