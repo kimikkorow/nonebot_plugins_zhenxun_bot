@@ -135,8 +135,9 @@ jobs:
                   organization_id=org_id,
               )
               runtime = util_models.RuntimeOptions()
+              headers = {}
               try:
-                  response = client.create_repository_with_options(request, runtime)
+                  response = client.create_repository_with_options(request, headers, runtime)
                   print(f"✅ Created repository: {repo_name}")
                   return True
               except Exception as error:
