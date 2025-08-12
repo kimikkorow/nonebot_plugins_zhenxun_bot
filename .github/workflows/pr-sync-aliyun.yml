@@ -89,6 +89,7 @@ jobs:
 
       - name: Process each changed plugin
         id: process-plugins
+        shell: python
         if: ${{ steps.changed-plugins.outputs.changed_plugins != '' }}
         run: |
           import json
@@ -163,6 +164,7 @@ jobs:
 
       - name: Update plugins.json with aliurl
         if: ${{ steps.process-plugins.outputs.results != '' }}
+        shell: python
         run: |
           import json
           import os
@@ -196,7 +198,6 @@ jobs:
               print("✅ plugins.json updated with aliurl")
           else:
               print("⚠️ No plugins updated")
-        shell: python
 
       - name: Commit and push changes
         if: ${{ success() && steps.process-plugins.outputs.results != '' }}
