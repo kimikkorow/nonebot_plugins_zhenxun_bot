@@ -1,7 +1,7 @@
 name: PR Sync to Aliyun
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
     paths:
       - 'plugins.json'
@@ -13,69 +13,66 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      issues: write  # 添加issues:write权限以创建评论
+      issues: write
+
     steps:
-      - name: Checkout code with PR changes
+      - name: Checkout base repo (safe)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ github.base_ref }}
           fetch-depth: 0
+
+      - name: Fetch PR branch from fork
+        run: |
+          git remote add pr_repo https://github.com/${{ github.event.pull_request.head.repo.full_name }}.git
+          git fetch pr_repo ${{ github.head_ref }} --depth=1
+          git checkout FETCH_HEAD
 
       - name: Identify changed plugins
         id: changed-plugins
         run: |
           import json
           import os
-          
-          # 获取当前和基础分支的plugins.json
-          current_plugins = []
-          base_plugins = []
-          
+          import subprocess
+
+          # 先保存当前 plugins.json
           try:
               with open('plugins.json', 'r', encoding='utf-8') as f:
                   current_plugins = json.load(f)
           except FileNotFoundError:
-              print("::warning::plugins.json not found")
-          
-          # 获取基础分支的plugins.json
-          base_ref = os.environ['GITHUB_BASE_REF']
-          head_ref = os.environ['GITHUB_HEAD_REF']
-          
-          os.system(f'git fetch origin {base_ref} --depth=1')
-          os.system(f'git show origin/{base_ref}:plugins.json > base_plugins.json 2>/dev/null || true')
-          
+              current_plugins = []
+              print("::warning::plugins.json not found in PR branch")
+
+          # 获取 base 分支的 plugins.json
+          subprocess.run(['git', 'checkout', '${{ github.base_ref }}'], check=True)
           try:
-              with open('base_plugins.json', 'r', encoding='utf-8') as f:
+              with open('plugins.json', 'r', encoding='utf-8') as f:
                   base_plugins = json.load(f)
           except FileNotFoundError:
+              base_plugins = []
               print("::warning::Base plugins.json not found")
-          
-          # 找出新增或修改的插件
+
+          # 再切回 PR 分支
+          subprocess.run(['git', 'checkout', '-'], check=True)
+
           changed = []
           base_map = {p.get('github_url'): p for p in base_plugins}
-          
           for plugin in current_plugins:
               github_url = plugin.get('github_url')
               if not github_url:
                   continue
-                  
               base_plugin = base_map.get(github_url)
-              
-              # 新增插件或插件数据有变更
               if not base_plugin or json.dumps(plugin, sort_keys=True) != json.dumps(base_plugin, sort_keys=True):
-                  # 提取仓库名称
                   repo_name = github_url.split('/')[-1]
                   if repo_name.endswith('.git'):
                       repo_name = repo_name[:-4]
-                  
                   changed.append({
                       'name': plugin.get('name', ''),
                       'github_url': github_url,
                       'repo_name': repo_name,
                       'current_data': plugin
                   })
-          
-          # 使用新方法输出结果
+
           if changed:
               print(f"Changed plugins: {json.dumps(changed, ensure_ascii=False)}")
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
@@ -83,6 +80,9 @@ jobs:
           else:
               print("No changed plugins found")
         shell: python
+
+      # 后面的步骤（推送到阿里云 / 更新 aliurl / 提交）可以保留你原来的逻辑
+
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
           GITHUB_HEAD_REF: ${{ github.head_ref }}
@@ -215,47 +215,3 @@ jobs:
             git commit -m "Add aliurl to plugins.json for Aliyun Codeup sync"
             git push
           fi
-
-      - name: Create PR comment
-        if: ${{ always() }}
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}  # 显式传递令牌
-          script: |
-            const results = '${{ steps.process-plugins.outputs.results || '[]' }}' ? 
-                           JSON.parse('${{ steps.process-plugins.outputs.results || '[]' }}') : [];
-            
-            let message = "### 🔄 阿里云同步结果\n\n";
-            
-            if (results.length === 0) {
-              message += "没有需要同步的插件变更";
-            } else {
-              message += "| 插件 | 状态 | 阿里云仓库 |\n";
-              message += "|------|------|------------|\n";
-              
-              results.forEach(result => {
-                const pluginName = result.github_url.split('/').pop();
-                if (result.status === 'success') {
-                  message += `| ${pluginName} | ✅ 成功 | ${result.aliurl} |\n`;
-                } else {
-                  message += `| ${pluginName} | ❌ 失败 | ${result.error || '未知错误'} |\n`;
-                }
-              });
-              
-              message += "\n";
-              
-              if (results.some(r => r.status === 'success')) {
-                message += "> 已更新 plugins.json 添加 aliurl 字段\n";
-              }
-            }
-            
-            try {
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: message
-              });
-            } catch (e) {
-              console.error("Failed to create comment:", e);
-            }
