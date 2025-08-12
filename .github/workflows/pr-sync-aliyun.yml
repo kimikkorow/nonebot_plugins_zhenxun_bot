@@ -128,7 +128,7 @@ jobs:
               return devops20210625Client(config)
 
           # 创建仓库函数
-          def create_repository(client, org_id, repo_name):
+          def create_repository(client, access_token, org_id, repo_name):
               request = devops_20210625_models.CreateRepositoryRequest(
                   access_token=access_token,
                   name=repo_name,
