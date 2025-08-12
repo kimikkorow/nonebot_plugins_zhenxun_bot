@@ -91,76 +91,52 @@ jobs:
         id: process-plugins
         shell: python
         if: ${{ steps.changed-plugins.outputs.changed_plugins != '' }}
+        env:
+          CHANGED_PLUGINS: ${{ steps.changed-plugins.outputs.changed_plugins }}
+          ALIYUN_ACCOUNT: ${{ secrets.ALIYUN_ACCOUNT }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+          ALIYUN_ORG_ID: '67a361cf556e6cdab537117a'
+          ALIYUN_GROUP_PATH: 'zhenxun_plugins'
         run: |
           import json
           import os
           import subprocess
           
-          changed_plugins = json.loads('${{ steps.changed-plugins.outputs.changed_plugins }}')
+          changed_plugins = json.loads(os.environ['CHANGED_PLUGINS'])
           results = []
-          
-          # 阿里云基础配置
+
           aliyun_account = os.environ['ALIYUN_ACCOUNT']
           aliyun_password = os.environ['ALIYUN_PASSWORD']
           org_id = os.environ['ALIYUN_ORG_ID']
           group_path = os.environ['ALIYUN_GROUP_PATH']
-          
+
           for plugin in changed_plugins:
               github_url = plugin['github_url']
               repo_name = plugin['repo_name']
               
-              # 阿里云仓库URL（带认证）
               auth_url = f"https://{aliyun_account}:{aliyun_password}@codeup.aliyun.com/{org_id}/{group_path}/{repo_name}.git"
-              # 显示用URL（隐藏密码）
               display_url = f"https://{aliyun_account}:****@codeup.aliyun.com/{org_id}/{group_path}/{repo_name}.git"
-              
+
               try:
-                  # 克隆GitHub仓库
                   subprocess.run(['git', 'clone', '--depth=1', github_url, repo_name], check=True)
-                  
-                  # 进入仓库目录
                   os.chdir(repo_name)
-                  
-                  # 添加阿里云远程
                   subprocess.run(['git', 'remote', 'add', 'aliup', auth_url], check=True)
-                  
-                  # 尝试推送到阿里云（自动创建仓库）
+
                   try:
-                      # 首次尝试推送
                       subprocess.run(['git', 'push', 'aliup', 'HEAD:main'], check=True)
                   except subprocess.CalledProcessError:
-                      # 如果失败，尝试强制推送（解决空仓库问题）
-                      print("First push failed, trying force push")
                       subprocess.run(['git', 'push', 'aliup', 'HEAD:main', '--force'], check=True)
-                  
+
                   os.chdir('..')
-                  
-                  # 记录结果
-                  results.append({
-                      'github_url': github_url,
-                      'aliurl': display_url,
-                      'status': 'success'
-                  })
-                  
+                  results.append({'github_url': github_url, 'aliurl': display_url, 'status': 'success'})
                   print(f"✅ Successfully synced {repo_name} to Aliyun Codeup")
-                  
+
               except Exception as e:
                   print(f"❌ Failed to sync {repo_name}: {str(e)}")
-                  results.append({
-                      'github_url': github_url,
-                      'status': 'failed',
-                      'error': str(e)
-                  })
-          
-          # 使用新方法输出结果
-          if results:
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write(f'results={json.dumps(results)}\n')
-        env:
-          ALIYUN_ACCOUNT: ${{ secrets.ALIYUN_ACCOUNT }}
-          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
-          ALIYUN_ORG_ID: '67a361cf556e6cdab537117a'
-          ALIYUN_GROUP_PATH: 'zhenxun_plugins'
+                  results.append({'github_url': github_url, 'status': 'failed', 'error': str(e)})
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'results={json.dumps(results, ensure_ascii=False)}\n')
 
       - name: Update plugins.json with aliurl
         if: ${{ steps.process-plugins.outputs.results != '' }}
