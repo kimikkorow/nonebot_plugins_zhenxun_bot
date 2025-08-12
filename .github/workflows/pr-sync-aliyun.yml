@@ -133,10 +133,11 @@ jobs:
 
 
           # 创建仓库函数
-          def create_repository(client, access_token, org_id, repo_name):
+          def create_repository(client, org_id, repo_name):
               request = devops_20210625_models.CreateRepositoryRequest(
-                  access_token=access_token,
+                  namespace_id=1638483,
                   name=repo_name,
+                  visibility_level=10,
                   organization_id=org_id,
               )
               runtime = util_models.RuntimeOptions()
@@ -174,7 +175,7 @@ jobs:
 
               try:
                   # 1. 创建阿里云仓库（如果不存在）
-                  if not create_repository(aliyun_client, access_token, org_id, repo_name):
+                  if not create_repository(aliyun_client, org_id, repo_name):
                       raise Exception(f"Repository creation failed: {repo_name}")
                   
                   # 2. 克隆 GitHub 仓库
