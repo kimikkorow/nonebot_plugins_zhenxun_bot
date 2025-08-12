@@ -1,0 +1,245 @@
+name: Sync to Aliyun on PR
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - 'plugins.json'
+
+jobs:
+  sync_to_aliyun:
+    runs-on: ubuntu-latest
+    name: Sync plugins to Aliyun Codeup
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout code with PR changes
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Identify changed plugins
+        id: changed-plugins
+        run: |
+          import json
+          import os
+          
+          # 获取当前和基础分支的plugins.json
+          current_plugins = {}
+          base_plugins = {}
+          
+          try:
+              with open('plugins.json', 'r', encoding='utf-8') as f:
+                  current_plugins = json.load(f)
+          except FileNotFoundError:
+              print("::warning::plugins.json not found")
+          
+          # 获取基础分支的plugins.json
+          os.system('git fetch origin ${{ github.base_ref }} --depth=1')
+          os.system('git checkout origin/${{ github.base_ref }} -- plugins.json 2>/dev/null || true')
+          
+          try:
+              with open('plugins.json', 'r', encoding='utf-8') as f:
+                  base_plugins = json.load(f)
+          except FileNotFoundError:
+              print("::warning::Base plugins.json not found")
+          
+          # 切回PR分支的plugins.json
+          os.system('git checkout ${{ github.event.pull_request.head.ref }} -- plugins.json')
+          
+          # 找出新增或修改的插件
+          changed = []
+          base_map = {p.get('github_url'): p for p in base_plugins}
+          
+          for plugin in current_plugins:
+              github_url = plugin.get('github_url')
+              if not github_url:
+                  continue
+                  
+              base_plugin = base_map.get(github_url)
+              
+              # 新增插件或github_url有变更
+              if not base_plugin or base_plugin.get('github_url') != github_url:
+                  # 提取仓库名称
+                  repo_name = github_url.split('/')[-1]
+                  if repo_name.endswith('.git'):
+                      repo_name = repo_name[:-4]
+                  
+                  changed.append({
+                      'name': plugin.get('name', ''),
+                      'github_url': github_url,
+                      'repo_name': repo_name,
+                      'current_data': plugin
+                  })
+          
+          # 输出结果
+          print(f"Changed plugins: {json.dumps(changed, ensure_ascii=False)}")
+          print(f"::set-output name=changed_plugins::{json.dumps(changed)}")
+        shell: python
+
+      - name: Setup Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git config --global http.postBuffer 524288000  # 增加缓冲区大小
+
+      - name: Process each changed plugin
+        id: process-plugins
+        if: ${{ fromJson(steps.changed-plugins.outputs.changed_plugins) != '[]' }}
+        run: |
+          import json
+          import os
+          import subprocess
+          
+          changed_plugins = json.loads('${{ steps.changed-plugins.outputs.changed_plugins }}')
+          results = []
+          
+          # 阿里云基础配置
+          aliyun_account = os.environ['ALIYUN_ACCOUNT']
+          aliyun_password = os.environ['ALIYUN_PASSWORD']
+          org_id = os.environ['ALIYUN_ORG_ID']
+          group_path = os.environ['ALIYUN_GROUP_PATH']
+          
+          for plugin in changed_plugins:
+              github_url = plugin['github_url']
+              repo_name = plugin['repo_name']
+              
+              # 阿里云仓库URL（带认证）
+              auth_url = f"https://{aliyun_account}:{aliyun_password}@codeup.aliyun.com/{org_id}/{group_path}/{repo_name}.git"
+              # 显示用URL（隐藏密码）
+              display_url = f"https://{aliyun_account}:****@codeup.aliyun.com/{org_id}/{group_path}/{repo_name}.git"
+              
+              try:
+                  # 克隆GitHub仓库
+                  subprocess.run(['git', 'clone', '--depth=1', github_url, repo_name], check=True)
+                  
+                  # 进入仓库目录
+                  os.chdir(repo_name)
+                  
+                  # 添加阿里云远程
+                  subprocess.run(['git', 'remote', 'add', 'aliup', auth_url], check=True)
+                  
+                  # 尝试推送到阿里云（自动创建仓库）
+                  try:
+                      # 首次尝试推送
+                      subprocess.run(['git', 'push', 'aliup', 'HEAD:main'], check=True)
+                  except subprocess.CalledProcessError:
+                      # 如果失败，尝试强制推送（解决空仓库问题）
+                      print("First push failed, trying force push")
+                      subprocess.run(['git', 'push', 'aliup', 'HEAD:main', '--force'], check=True)
+                  
+                  os.chdir('..')
+                  
+                  # 记录结果
+                  results.append({
+                      'github_url': github_url,
+                      'aliurl': display_url,
+                      'status': 'success'
+                  })
+                  
+                  print(f"✅ Successfully synced {repo_name} to Aliyun Codeup")
+                  
+              except Exception as e:
+                  print(f"❌ Failed to sync {repo_name}: {str(e)}")
+                  results.append({
+                      'github_url': github_url,
+                      'status': 'failed',
+                      'error': str(e)
+                  })
+          
+          # 输出结果
+          print(f"::set-output name=results::{json.dumps(results)}")
+        env:
+          ALIYUN_ACCOUNT: ${{ secrets.ALIYUN_ACCOUNT }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+          ALIYUN_ORG_ID: '67a361cf556e6cdab537117a'
+          ALIYUN_GROUP_PATH: 'zhenxun_plugins'
+        shell: python
+
+      - name: Update plugins.json with aliurl
+        if: ${{ fromJson(steps.process-plugins.outputs.results) != '[]' }}
+        run: |
+          import json
+          
+          # 读取当前plugins.json
+          with open('plugins.json', 'r', encoding='utf-8') as f:
+              plugins = json.load(f)
+          
+          # 获取处理结果
+          results = json.loads('${{ steps.process-plugins.outputs.results }}')
+          
+          # 更新aliurl字段
+          updated = False
+          for result in results:
+              if result['status'] != 'success':
+                  continue
+                  
+              for plugin in plugins:
+                  if plugin.get('github_url') == result['github_url']:
+                      # 只添加或更新aliurl字段
+                      plugin['aliurl'] = result['aliurl']
+                      updated = True
+                      print(f"Updated {plugin['name']} with aliurl")
+                      break
+          
+          if updated:
+              # 保存更新
+              with open('plugins.json', 'w', encoding='utf-8') as f:
+                  json.dump(plugins, f, ensure_ascii=False, indent=2)
+              
+              print("✅ plugins.json updated with aliurl")
+          else:
+              print("⚠️ No plugins updated")
+        shell: python
+
+      - name: Commit and push changes
+        if: ${{ success() && fromJson(steps.process-plugins.outputs.results) != '[]' }}
+        run: |
+          git add plugins.json
+          
+          if git diff-index --quiet HEAD --; then
+            echo "No changes to commit"
+          else
+            git commit -m "Add aliurl to plugins.json for Aliyun Codeup sync"
+            git push
+          fi
+
+      - name: Create PR comment
+        if: ${{ always() }}
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const results = JSON.parse('${{ steps.process-plugins.outputs.results || '[]' }}');
+            
+            let message = "### 🔄 阿里云同步结果\n\n";
+            
+            if (results.length === 0) {
+              message += "没有需要同步的插件变更";
+            } else {
+              message += "| 插件 | 状态 | 阿里云仓库 |\n";
+              message += "|------|------|------------|\n";
+              
+              results.forEach(result => {
+                const pluginName = result.github_url.split('/').pop();
+                if (result.status === 'success') {
+                  message += `| ${pluginName} | ✅ 成功 | ${result.aliurl} |\n`;
+                } else {
+                  message += `| ${pluginName} | ❌ 失败 | ${result.error || '未知错误'} |\n`;
+                }
+              });
+              
+              message += "\n";
+              
+              if (results.some(r => r.status === 'success')) {
+                message += "> 已更新 plugins.json 添加 aliurl 字段\n";
+              }
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: message
+            });
