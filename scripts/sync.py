@@ -1,5 +1,4 @@
 import argparse
-import contextlib
 import json
 import sys
 import urllib.parse
@@ -98,22 +97,9 @@ def create_repository(
             print(f"ℹ️ 代码库已存在: {repo_name}")
             return True
 
-        elif response.status_code == 401:
-            print("❌ 认证失败: 请检查个人访问令牌是否正确")
-            return False
-
-        elif response.status_code == 403:
-            print("❌ 权限不足: 请确认有创建代码库的权限")
-            return False
-
         else:
             # 其他错误
-            error_msg = f"创建失败，状态码: {response.status_code}"
-            with contextlib.suppress(Exception):
-                error_data = response.json()
-                if "message" in error_data:
-                    error_msg = error_data["message"]
-            print(f"❌ {error_msg}")
+            print(f"❌ 创建代码库失败 {response.status_code} {response.json()}")
             return False
 
     except requests.exceptions.Timeout:
